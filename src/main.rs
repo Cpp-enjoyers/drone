@@ -1,6 +1,9 @@
 #![allow(unused)]
 
 use crossbeam_channel::{select_biased, unbounded, Receiver, Sender};
+use log::{error, info, LevelFilter};
+use rand::distributions::Bernoulli;
+use rand::prelude::*;
 use std::collections::HashMap;
 use std::{fs, thread};
 use wg_2024::config::Config;
@@ -15,8 +18,9 @@ struct MyDrone {
     controller_send: Sender<DroneEvent>,
     controller_recv: Receiver<DroneCommand>,
     packet_recv: Receiver<Packet>,
-    pdr: f32,
+    pdr_distribution: Bernoulli,
     packet_send: HashMap<NodeId, Sender<Packet>>,
+    shutdown_received: bool,
 }
 
 impl Drone for MyDrone {
@@ -28,118 +32,165 @@ impl Drone for MyDrone {
         packet_send: HashMap<NodeId, Sender<Packet>>,
         pdr: f32,
     ) -> Self {
+        pretty_env_logger::try_init();
+        if cfg!(debug_assertions) {
+            log::set_max_level(LevelFilter::Trace);
+        } else {
+            log::set_max_level(LevelFilter::Error);
+        }
+        let mut pdr_distribution = Bernoulli::new(0.0).unwrap();
+        if let Ok(distr_from_settings) = Bernoulli::new(pdr as f64) {
+            pdr_distribution = distr_from_settings;
+        } else {
+            error!("Error during drone creation: PDR invalid, setting to 0%.")
+        }
         Self {
             id,
             controller_send,
             controller_recv,
             packet_recv,
             packet_send,
-            pdr,
+            pdr_distribution,
+            shutdown_received: false,
         }
     }
 
     fn run(&mut self) {
-        loop {
+        let mut channels_clear = false;
+        while !channels_clear && !self.shutdown_received {
+            channels_clear = false;
             select_biased! {
                 recv(self.controller_recv) -> command => {
                     if let Ok(command) = command {
-                        if let DroneCommand::Crash = command {
-                            println!("drone {} crashed", self.id);
-                            break;
-                        }
                         self.handle_command(command);
                     }
-                }
+                },
                 recv(self.packet_recv) -> packet => {
                     if let Ok(packet) = packet {
                         self.handle_packet(packet);
                     }
                 },
+                default => {channels_clear = true;},
             }
         }
     }
 }
 
 impl MyDrone {
-    fn create_nack() {
-        /*
-         let mut reversed_routing_header = packet.routing_header.hops[..=packet.routing_header.hop_index].to_vec();
+    fn send_nack(&self, packet: Packet, nack_type: NackType) {
+        let mut reversed_routing_header =
+            packet.routing_header.hops[..=packet.routing_header.hop_index].to_vec();
         reversed_routing_header.reverse();
 
-        let nack = Packet{
+        let nack = Packet {
             pack_type: PacketType::Nack(Nack {
                 fragment_index: 0,
-                nack_type: NackType::UnexpectedRecipient(self.id.clone())
+                nack_type,
             }),
-            routing_header: SourceRoutingHeader{
+            routing_header: SourceRoutingHeader {
                 hop_index: 1,
                 hops: reversed_routing_header.clone(),
             },
-            session_id: packet.session_id
+            session_id: packet.session_id,
         };
-        // send if needed or use another fun
-         */
-        todo!();
+        // if packet type is Ack,Nack,FloodResponse, send original packet to sim controller
+        // else send back nack
+        match packet.pack_type {
+            // send original packet to simulation controller
+            PacketType::Nack(_) | PacketType::Ack(_) | PacketType::FloodResponse(_) => {
+                self.controller_send
+                    .send(DroneEvent::ControllerShortcut(packet));
+            }
+
+            // Send nack back
+            PacketType::FloodRequest(_) | PacketType::MsgFragment(_) => {
+                if (reversed_routing_header.len() < 2) {
+                    info!("Too small routing header, aborting send.");
+                    return;
+                }
+                if let Some(sender) = self
+                    .packet_send
+                    .get(reversed_routing_header.get(1).unwrap())
+                {
+                    self.controller_send
+                        .send(DroneEvent::PacketSent(nack.clone()));
+                    sender.send(nack);
+                }
+            }
+        }
     }
 
     fn handle_packet(&mut self, packet: Packet) {
-        /* let (f1, f2) =  */ match packet.pack_type {
-            PacketType::Nack(_nack) => todo!(),
-            PacketType::Ack(_ack) => todo!(),
-            PacketType::MsgFragment(_fragment) => todo!(),
-            PacketType::FloodRequest(_flood_request) => todo!(),
-            PacketType::FloodResponse(_flood_response) => todo!(),
-        }
-
         // step1 and step3
         let hop_index: usize = packet.routing_header.hop_index;
         if hop_index + 1 >= packet.routing_header.hops.len() {
-            // check if Nack::new() exists
-            Self::create_nack();
+            Self::send_nack(self, packet, NackType::DestinationIsDrone);
+            return;
         }
         let opt: Option<&u8> = packet.routing_header.hops.get(hop_index);
         if opt.is_none_or(|v: &u8| *v != self.id) {
-            Self::create_nack();
+            Self::send_nack(self, packet, NackType::UnexpectedRecipient(self.id));
+            return;
         }
-
         // STEP 2
         let next_hop_index: usize = hop_index + 1;
-
         // STEP 4
         let next_hop_drone_id: u8 = packet.routing_header.hops[next_hop_index];
-        let next_hop_drone_channel: Option<&Sender<Packet>> = self.packet_send.get(&next_hop_drone_id);
-        if next_hop_drone_channel.is_none() {
-            Self::create_nack();
+        if let Some(next_hop_drone_channel) = self.packet_send.get(&next_hop_drone_id) {
+            self.handle_packet_internal(packet, next_hop_drone_channel, next_hop_index);
+        } else {
+            Self::send_nack(self, packet, NackType::ErrorInRouting(next_hop_drone_id));
         }
+    }
 
-        // f2()
+    fn handle_packet_internal(
+        &self,
+        mut packet: Packet,
+        send_to: &Sender<Packet>,
+        next_hop_index: usize,
+    ) {
+        match packet.pack_type {
+            PacketType::Nack(_) | PacketType::Ack(_) => {
+                packet.routing_header.hop_index = next_hop_index;
+                self.controller_send
+                    .send(DroneEvent::PacketSent(packet.clone()));
+                send_to.send(packet);
+            }
+            PacketType::MsgFragment(_) => {
+                packet.routing_header.hop_index = next_hop_index;
+                if self.pdr_distribution.sample(&mut rand::thread_rng()) {
+                    self.controller_send
+                        .send(DroneEvent::PacketDropped(packet.clone()));
+                    self.send_nack(packet, NackType::Dropped);
+                } else {
+                    self.controller_send
+                        .send(DroneEvent::PacketSent(packet.clone()));
+                    send_to.send(packet);
+                }
+            }
+            PacketType::FloodRequest(flood_request) => todo!(),
+            PacketType::FloodResponse(flood_response) => todo!(),
+        }
     }
 
     fn handle_command(&mut self, command: DroneCommand) {
         match command {
-            DroneCommand::AddSender(_node_id, _sender) => self.add_sender(_node_id, _sender),
-            DroneCommand::SetPacketDropRate(_pdr) => self.set_packet_drop_rate(_pdr),
-            DroneCommand::Crash => unreachable!(),
-            DroneCommand::RemoveSender(_node_id) => self.remove_sender(_node_id),
+            DroneCommand::AddSender(node_id, sender) => {
+                self.packet_send.insert(node_id, sender);
+            }
+            DroneCommand::SetPacketDropRate(pdr) => {
+                if let Ok(new_pdr) = Bernoulli::new(pdr as f64) {
+                    self.pdr_distribution = new_pdr;
+                } else {
+                    info!("PDR set by sim contr is not valid, keeping previous one");
+                }
+            }
+            DroneCommand::Crash => self.shutdown_received = true,
+            DroneCommand::RemoveSender(node_id) => {
+                self.packet_send.remove(&node_id);
+            }
         }
     }
-
-    fn add_sender(&mut self, _node_id: NodeId, _sender: Sender<Packet>){
-        // check?
-        self.packet_send.insert(_node_id, _sender);
-    }
-
-    fn set_packet_drop_rate(&mut self, _pdr: f32){
-        // check?
-        self.pdr = _pdr;
-    }
-
-    fn remove_sender(&mut self, _node_id: NodeId){
-        // check?
-        self.packet_send.remove(&_node_id);
-    }
-
-
 }
 
 struct SimulationController {
