@@ -128,7 +128,11 @@ impl MyDrone {
 
     fn handle_packet(&mut self, mut packet: Packet) {
         if let PacketType::FloodRequest(fr) = packet.pack_type {
-            let Packet { routing_header, session_id, ..} = packet;
+            let Packet {
+                routing_header,
+                session_id,
+                ..
+            } = packet;
             self.handle_flood(routing_header, session_id, fr);
             return;
         }
@@ -195,7 +199,12 @@ impl MyDrone {
         }
     }
 
-    fn handle_flood(&self, routing_header: SourceRoutingHeader, sid: u64, mut flood_r: FloodRequest) {
+    fn handle_flood(
+        &self,
+        routing_header: SourceRoutingHeader,
+        sid: u64,
+        mut flood_r: FloodRequest,
+    ) {
         let sender_tuple = flood_r.path_trace.last();
         if sender_tuple.is_none() {
             error!("Received a flood request with empty path_trace!!!");
@@ -205,24 +214,28 @@ impl MyDrone {
         let &(sender_id, _) = sender_tuple.unwrap();
         flood_r.increment(self.id, NodeType::Drone);
 
-        // ! TODO id is here?? 
+        // ! TODO id is here??
         // TODO this should handle both floodResponse cases (check on hashmap size)
-        if (true /* TODO */) {
+        if (true/* TODO */) {
             let mut new_packet: Packet = flood_r.generate_response(sid);
             new_packet.routing_header.increase_hop_index();
             let next_hop: Option<NodeId> = new_packet.routing_header.current_hop();
             self.packet_send.get(&next_hop.unwrap()).map_or_else(
-                || info!("what to say here?"), 
-                |c: &Sender<Packet>| self.send_packet(new_packet, c)
+                || info!("what to say here?"),
+                |c: &Sender<Packet>| self.send_packet(new_packet, c),
             );
             return;
-        } 
+        }
         // TODO add the check if the neighbour exists in a debug only log (#[...] { error!(...); })
         self.packet_send.iter().for_each(|(id, c)| {
             if *id == sender_id {
                 return;
             }
-            c.send(Packet::new_flood_request(routing_header.clone(), sid, flood_r.clone()));
+            c.send(Packet::new_flood_request(
+                routing_header.clone(),
+                sid,
+                flood_r.clone(),
+            ));
         });
     }
 
