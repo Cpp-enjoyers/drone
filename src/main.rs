@@ -1,27 +1,54 @@
 #![allow(unused)]
 
-use crossbeam_channel::{select_biased, unbounded, Receiver, Sender};
+mod ring_buffer;
+use crossbeam_channel::{select, select_biased, unbounded, Receiver, Sender};
 use log::{error, info, warn, LevelFilter};
 use rand::distributions::Bernoulli;
 use rand::prelude::*;
+use ring_buffer::RingBuffer;
 use std::collections::HashMap;
-use std::{fs, thread};
+use std::{default, fs, thread};
 use wg_2024::config::Config;
 use wg_2024::controller::{DroneCommand, DroneEvent};
 use wg_2024::drone::Drone;
 use wg_2024::network::{NodeId, SourceRoutingHeader};
 use wg_2024::packet::*;
+use wg_2024::tests::*;
 
+// TODO set log level statically to avoid compiling useless info! logs
 // TODO handle c.send() errors, just log the error I guess
 
-struct MyDrone {
+#[derive(Debug, PartialEq)]
+enum State {
+    Running,
+    Crashing,
+}
+
+impl State {
+    #[inline]
+    fn is_running(&self) -> bool {
+        match self {
+            State::Running => true,
+            State::Crashing => false,
+        }
+    }
+
+    #[inline]
+    fn is_crashing(&self) -> bool {
+        !self.is_running()
+    }
+}
+
+pub struct MyDrone {
     id: NodeId,
     controller_send: Sender<DroneEvent>,
     controller_recv: Receiver<DroneCommand>,
     packet_recv: Receiver<Packet>,
     pdr_distribution: Bernoulli,
     packet_send: HashMap<NodeId, Sender<Packet>>,
-    shutdown_received: bool,
+    state: State,
+    // ! TODO use hashmap if necessary
+    flood_history: RingBuffer<(NodeId, u64)>,
 }
 
 impl Drone for MyDrone {
@@ -33,12 +60,7 @@ impl Drone for MyDrone {
         packet_send: HashMap<NodeId, Sender<Packet>>,
         pdr: f32,
     ) -> Self {
-        pretty_env_logger::try_init();
-        log::set_max_level(if cfg!(debug_assertions) {
-            LevelFilter::Trace
-        } else {
-            LevelFilter::Error
-        });
+        // pretty_env_logger::try_init();
 
         let mut pdr_distribution =
             Bernoulli::new(pdr as f64).unwrap_or_else(|e: rand::distributions::BernoulliError| {
@@ -53,15 +75,13 @@ impl Drone for MyDrone {
             packet_recv,
             packet_send,
             pdr_distribution,
-            // TODO how to remove?
-            shutdown_received: false,
+            state: State::Running,
+            flood_history: RingBuffer::new_with_size(64),
         }
     }
 
     fn run(&mut self) {
-        let mut channels_clear = false;
-        while !channels_clear && !self.shutdown_received {
-            channels_clear = false;
+        while self.is_running() {
             select_biased! {
                 recv(self.controller_recv) -> command => {
                     if let Ok(command) = command {
@@ -73,8 +93,17 @@ impl Drone for MyDrone {
                         self.handle_packet(packet);
                     }
                 },
-                // TODO check if this does what you think
-                default => { channels_clear = true; },
+            }
+        }
+        // TODO test
+        loop {
+            select! {
+                recv(self.packet_recv) -> packet => {
+                    if let Ok(packet) = packet {
+                        self.handle_crash(packet);
+                    }
+                },
+                default => { break; }
             }
         }
     }
@@ -84,9 +113,12 @@ impl MyDrone {
     fn send_nack(&self, packet: Packet, nack_type: NackType) {
         let mut source_header: SourceRoutingHeader = packet
             .routing_header
-            .sub_route(packet.routing_header.hop_index - 1..=0)
+            .sub_route(0..packet.routing_header.hop_index)
             .expect("this should not be happening");
-        source_header.increase_hop_index();
+        // TODO what the hell
+        source_header.reset_hop_index();
+        source_header.reverse();
+        source_header.hop_index = 1;
 
         // if packet type is Ack,Nack,FloodResponse, send original packet to sim controller
         // else send back nack
@@ -97,12 +129,11 @@ impl MyDrone {
                     .send(DroneEvent::ControllerShortcut(packet));
             }
             // Send nack back
-            PacketType::MsgFragment(_) => {
+            PacketType::MsgFragment(f) => {
                 if (source_header.hops.len() < 2) {
                     error!("Too small routing header, aborting send.");
                     return;
                 }
-                // ? is this better?
                 self.packet_send
                     .get(&source_header.current_hop().unwrap())
                     .map_or_else(
@@ -112,7 +143,7 @@ impl MyDrone {
                                 source_header,
                                 packet.session_id,
                                 Nack {
-                                    fragment_index: 0,
+                                    fragment_index: f.fragment_index,
                                     nack_type,
                                 },
                             );
@@ -122,7 +153,9 @@ impl MyDrone {
                         },
                     )
             }
-            PacketType::FloodRequest(_) => {} // TODO put unreachable if needed
+            PacketType::FloodRequest(_) => {
+                unreachable!()
+            }
         }
     }
 
@@ -172,13 +205,11 @@ impl MyDrone {
     fn send_packet(&self, packet: Packet, channel: &Sender<Packet>) {
         match packet.pack_type {
             PacketType::Nack(_) | PacketType::Ack(_) => {
-                // packet.routing_header.hop_index = next_hop_index;
                 self.controller_send
                     .send(DroneEvent::PacketSent(packet.clone()));
                 channel.send(packet);
             }
             PacketType::MsgFragment(_) => {
-                // packet.routing_header.hop_index = next_hop_index;
                 if self.pdr_distribution.sample(&mut rand::thread_rng()) {
                     self.controller_send
                         .send(DroneEvent::PacketDropped(packet.clone()));
@@ -200,7 +231,7 @@ impl MyDrone {
     }
 
     fn handle_flood(
-        &self,
+        &mut self,
         routing_header: SourceRoutingHeader,
         sid: u64,
         mut flood_r: FloodRequest,
@@ -214,9 +245,13 @@ impl MyDrone {
         let &(sender_id, _) = sender_tuple.unwrap();
         flood_r.increment(self.id, NodeType::Drone);
 
-        // ! TODO id is here??
-        // TODO this should handle both floodResponse cases (check on hashmap size)
-        if (true/* TODO */) {
+        // TODO test
+        if (self
+            .flood_history
+            .contains(&(flood_r.initiator_id, flood_r.flood_id))
+            && self.packet_send.len() <= 1)
+        // cargo fmt is clearly bonkers
+        {
             let mut new_packet: Packet = flood_r.generate_response(sid);
             new_packet.routing_header.increase_hop_index();
             let next_hop: Option<NodeId> = new_packet.routing_header.current_hop();
@@ -226,7 +261,9 @@ impl MyDrone {
             );
             return;
         }
-        // TODO add the check if the neighbour exists in a debug only log (#[...] { error!(...); })
+        // TODO add the check if the neighbour exists in debug mode
+        self.flood_history
+            .push((flood_r.initiator_id, flood_r.flood_id));
         self.packet_send.iter().for_each(|(id, c)| {
             if *id == sender_id {
                 return;
@@ -252,14 +289,56 @@ impl MyDrone {
                 }
                 warn!("PDR set by sim contr is not valid, keeping previous one");
             }
-            DroneCommand::Crash => self.shutdown_received = true,
+            DroneCommand::Crash => self.state = State::Crashing,
             DroneCommand::RemoveSender(node_id) => {
                 self.packet_send.remove(&node_id);
             }
         }
     }
+
+    fn handle_crash(&mut self, mut packet: Packet) {
+        match packet.pack_type {
+            PacketType::Nack(_) | PacketType::Ack(_) | PacketType::FloodResponse(_) => {
+                self.handle_packet(packet);
+            }
+            PacketType::FloodRequest(_) => {}
+            PacketType::MsgFragment(_) => {
+                // TODO check if you can remove it
+                packet.routing_header.increase_hop_index();
+                self.send_nack(packet, NackType::ErrorInRouting(self.id));
+            }
+        }
+    }
+
+    #[inline]
+    fn is_running(&self) -> bool {
+        self.state.is_running()
+    }
+
+    #[inline]
+    fn is_crashing(&self) -> bool {
+        self.state.is_crashing()
+    }
 }
 
+#[cfg(test)]
+mod tests {
+    use crate::*;
+
+    #[test]
+    fn test1() {
+        wg_2024::tests::generic_fragment_drop::<MyDrone>();
+    }
+
+    #[test]
+    fn test2() {
+        wg_2024::tests::generic_fragment_forward::<MyDrone>();
+    }
+}
+
+fn main() {}
+
+/*
 struct SimulationController {
     drones: HashMap<NodeId, Sender<DroneCommand>>,
     node_event_recv: Receiver<DroneEvent>,
@@ -332,3 +411,4 @@ fn main() {
         handle.join().unwrap();
     }
 }
+ */
