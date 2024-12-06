@@ -249,9 +249,10 @@ impl MyDrone {
         if (self
             .flood_history
             .contains(&(flood_r.initiator_id, flood_r.flood_id))
-            && self.packet_send.len() <= 1)
+            || self.packet_send.len() <= 1)
         // cargo fmt is clearly bonkers
         {
+
             let mut new_packet: Packet = flood_r.generate_response(sid);
             new_packet.routing_header.increase_hop_index();
             let next_hop: Option<NodeId> = new_packet.routing_header.current_hop();
@@ -261,6 +262,7 @@ impl MyDrone {
             );
             return;
         }
+
         // TODO add the check if the neighbour exists in debug mode
         self.flood_history
             .push((flood_r.initiator_id, flood_r.flood_id));
@@ -323,6 +325,8 @@ impl MyDrone {
 
 #[cfg(test)]
 mod tests {
+    use wg_2024::config::Client;
+
     use crate::*;
 
     #[test]
@@ -333,6 +337,112 @@ mod tests {
     #[test]
     fn test2() {
         wg_2024::tests::generic_fragment_forward::<MyDrone>();
+    }
+
+    // test flooding
+    #[test]
+    fn test3(){
+
+        // Client<1> channels
+        let (c_send, c_recv) = unbounded();
+        // Drone 11
+        let (d_send, d_recv) = unbounded();
+        // Drone 12
+        let (d12_send, d12_recv) = unbounded();
+        // Drone 13
+        let (d13_send, d13_recv) = unbounded();
+        // Drone 14
+        let (d14_send, d14_recv) = unbounded();
+        // SC - needed to not make the drone crash
+        let (_d_command_send, d_command_recv) = unbounded();
+
+        // Drone 11
+        let neighbours11 = HashMap::from([(12, d12_send.clone()), (13, d13_send.clone()), (14, d14_send.clone()), (1, c_send.clone())]);
+        let mut drone = MyDrone::new(
+            11,
+            unbounded().0,
+            d_command_recv.clone(),
+            d_recv.clone(),
+            neighbours11,
+            0.0,
+        );
+        // Drone 12
+        let neighbours12 = HashMap::from([(11, d_send.clone()), ]);
+        let mut drone2 = MyDrone::new(
+            12,
+            unbounded().0,
+            d_command_recv.clone(),
+            d12_recv.clone(),
+            neighbours12,
+            0.0,
+        );
+        // Drone 13
+        let neighbours13 = HashMap::from([(11, d_send.clone()), (14, d14_send.clone()), ]);
+        let mut drone3 = MyDrone::new(
+            13,
+            unbounded().0,
+            d_command_recv.clone(),
+            d13_recv.clone(),
+            neighbours13,
+            0.0,
+        );
+        // Drone 14
+        let neighbours14 = HashMap::from([(11, d_send.clone()), (13, d13_send.clone()), ]);
+        let mut drone4 = MyDrone::new(
+            14,
+            unbounded().0,
+            d_command_recv.clone(),
+            d14_recv.clone(),
+            neighbours14,
+            0.0,
+        );
+
+        // Spawn the drone's run method in a separate thread
+        thread::spawn(move || {
+            drone.run();
+        });
+
+        thread::spawn(move || {
+            drone2.run();
+        });
+
+        thread::spawn(move || {
+            drone3.run();
+        });
+
+        thread::spawn(move || {
+            drone4.run();
+        });
+
+        let mut msg = Packet::new_flood_request(
+            SourceRoutingHeader::new(vec![], 15),
+            23,
+            FloodRequest::initialize(56, 1, NodeType::Client)
+        );
+
+        // "Client" sends packet to the drone
+        d_send.send(msg.clone()).unwrap();
+
+        for _ in 0..3{
+            match c_recv.recv().unwrap().pack_type{
+                PacketType::FloodResponse(f) => {
+                    println!("{:?}", f.path_trace);
+                }
+                _ => {}
+            }
+        }
+
+        // assert_eq!(
+        //     c_recv.recv().unwrap(),
+        //     Packet {
+        //         pack_type: PacketType::FloodResponse(FloodResponse { flood_id: 56, path_trace: vec![(1, NodeType::Client), (11, NodeType::Drone), (12, NodeType::Drone)] },),
+        //         routing_header: SourceRoutingHeader {
+        //             hop_index: 2,
+        //             hops: vec![12, 11, 1],
+        //         },
+        //         session_id: 23,
+        //     }
+        // );
     }
 }
 
