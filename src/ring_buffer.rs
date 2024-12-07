@@ -10,7 +10,11 @@ impl<T> RingBuffer<T> {
     #[inline]
     pub fn new_with_size(size: usize) -> Self {
         Self {
-            buff: VecDeque::with_capacity(size),
+            buff: if size < 0x400 {
+                VecDeque::with_capacity(size)
+            } else {
+                VecDeque::new()
+            },
             size,
         }
     }
