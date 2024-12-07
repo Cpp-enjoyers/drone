@@ -2,7 +2,7 @@
 
 mod ring_buffer;
 use crossbeam_channel::{select, select_biased, unbounded, Receiver, Sender};
-use log::{error, info, warn, LevelFilter};
+use log::{error, info, trace, warn, LevelFilter};
 use rand::distributions::Bernoulli;
 use rand::prelude::*;
 use ring_buffer::RingBuffer;
@@ -17,7 +17,6 @@ use wg_2024::tests::*;
 
 const RING_BUFF_SZ: usize = 64;
 
-// TODO set log level statically to avoid compiling useless info! logs
 // TODO handle c.send() errors, just log the error I guess
 
 #[derive(Debug, PartialEq)]
@@ -43,6 +42,7 @@ impl State {
 
 pub struct MyDrone {
     id: NodeId,
+    log_channel: String,
     controller_send: Sender<DroneEvent>,
     controller_recv: Receiver<DroneCommand>,
     packet_recv: Receiver<Packet>,
@@ -62,15 +62,24 @@ impl Drone for MyDrone {
         packet_send: HashMap<NodeId, Sender<Packet>>,
         pdr: f32,
     ) -> Self {
-        // pretty_env_logger::try_init();
+        if (cfg!(test)) {
+            pretty_env_logger::formatted_builder()
+                .filter_level(LevelFilter::Info)
+                .is_test(true)
+                .try_init();
+        } else {
+            pretty_env_logger::try_init();
+        }
 
+        let log_channel = format!("CppEnjoyers[{}]", id);
         let mut pdr_distribution =
             Bernoulli::new(pdr as f64).unwrap_or_else(|e: rand::distributions::BernoulliError| {
-                warn!("Invalide pdr ({pdr}) requested, defaulting to 0%");
+                warn!(target: &*log_channel, "Invalid PDR {}, setting to 0.0", pdr);
                 Bernoulli::new(0.).unwrap()
             });
         Self {
             id,
+            log_channel,
             controller_send,
             controller_recv,
             packet_recv,
@@ -82,15 +91,18 @@ impl Drone for MyDrone {
     }
 
     fn run(&mut self) {
+        info!(target: &self.log_channel, "started");
         while self.is_running() {
             select_biased! {
                 recv(self.controller_recv) -> command => {
                     if let Ok(command) = command {
+                        info!(target: &self.log_channel, "processing command: {:?}", &command);
                         self.handle_command(command);
                     }
                 },
                 recv(self.packet_recv) -> packet => {
                     if let Ok(packet) = packet {
+                        info!(target: &self.log_channel, "processing packet: {:?}", &packet);
                         self.handle_packet(packet);
                     }
                 },
@@ -101,10 +113,14 @@ impl Drone for MyDrone {
             select! {
                 recv(self.packet_recv) -> packet => {
                     if let Ok(packet) = packet {
+                        info!(target: &self.log_channel, "processing packet during crash: {:?}", &packet);
                         self.handle_crash(packet);
                     }
                 },
-                default => { break; }
+                default => {
+                    info!(target: &self.log_channel, "crashing");
+                    break;
+                }
             }
         }
     }
@@ -115,8 +131,11 @@ impl MyDrone {
         let mut source_header: SourceRoutingHeader = packet
             .routing_header
             .sub_route(0..packet.routing_header.hop_index)
-            .expect("this should not be happening");
-        // TODO what the hell
+            .unwrap_or_else(|| {
+                error!(target: &self.log_channel, "Source routing header can't be inverted");
+                panic!();
+            });
+        // what the hell is the WG implementation
         source_header.reset_hop_index();
         source_header.reverse();
         source_header.hop_index = 1;
@@ -126,6 +145,7 @@ impl MyDrone {
         match packet.pack_type {
             // send original packet to simulation controller
             PacketType::Nack(_) | PacketType::Ack(_) | PacketType::FloodResponse(_) => {
+                info!(target: &self.log_channel, "sending original packet to controller: {:?}", &packet);
                 packet.routing_header.decrease_hop_index();
                 self.controller_send
                     .send(DroneEvent::ControllerShortcut(packet));
@@ -133,13 +153,13 @@ impl MyDrone {
             // Send nack back
             PacketType::MsgFragment(f) => {
                 if (source_header.hops.len() < 2) {
-                    error!("Too small routing header, aborting send.");
+                    error!(target: &self.log_channel, "Routing header too small, can't send.");
                     return;
                 }
                 self.packet_send
-                    .get(&source_header.current_hop().unwrap())
+                    .get(&source_header.current_hop().unwrap_or_else(|| {error!(target: &self.log_channel, "Can't get current hop"); panic!();}))
                     .map_or_else(
-                        || info!("what to say here?"),
+                        || error!(target: &self.log_channel, "Can't get sender, topology error?"),
                         |s: &Sender<Packet>| {
                             let nack: Packet = Packet::new_nack(
                                 source_header,
@@ -149,13 +169,16 @@ impl MyDrone {
                                     nack_type,
                                 },
                             );
+                            info!(target: &self.log_channel, "logging nack to controller: {:?}", &nack);
                             self.controller_send
                                 .send(DroneEvent::PacketSent(nack.clone()));
+                            info!(target: &self.log_channel, "sending nack back: {:?}", &nack);
                             s.send(nack);
                         },
                     )
             }
             PacketType::FloodRequest(_) => {
+                error!(target: &self.log_channel, "Found a flood request while trying to send back nack. Impossible situation.");
                 unreachable!()
             }
         }
@@ -163,6 +186,7 @@ impl MyDrone {
 
     fn handle_packet(&mut self, mut packet: Packet) {
         if let PacketType::FloodRequest(fr) = packet.pack_type {
+            info!(target: &self.log_channel, "Handling flood request: {:?}", &fr);
             let Packet {
                 routing_header,
                 session_id,
@@ -181,54 +205,64 @@ impl MyDrone {
         // but it's less clean than this so decide later
         let opt: Option<NodeId> = packet.routing_header.previous_hop();
         if opt.is_none_or(|v: NodeId| v != self.id) {
+            info!(target: &self.log_channel, "Sending nack - Unexpected recipient: {:?}", &packet);
             self.send_nack(packet, NackType::UnexpectedRecipient(self.id));
             return;
         }
         let next_hop: Option<NodeId> = packet.routing_header.current_hop();
-        if next_hop.is_none() {
+        if let Some(next_hop) = next_hop {
+            // STEP 4
+            let next_hop_drone_id: NodeId = next_hop;
+            let next_hop_channel: Option<&Sender<Packet>> =
+                self.packet_send.get(&next_hop_drone_id);
+
+            if let Some(next_hop_channel) = next_hop_channel {
+                self.send_packet(packet, next_hop_channel);
+            } else {
+                info!(target: &self.log_channel, "Sending nack - Error in routing: {:?}", &packet);
+                self.send_nack(packet, NackType::ErrorInRouting(next_hop_drone_id));
+            }
+        } else {
+            info!(target: & self.log_channel, "Sending nack - Drone as destination: {:?}", & packet);
             self.send_nack(packet, NackType::DestinationIsDrone);
-            return;
         }
-
-        // STEP 4
-        let next_hop_drone_id: NodeId = next_hop.expect("this should not be happening");
-        let next_hop_channel: Option<&Sender<Packet>> = self.packet_send.get(&next_hop_drone_id);
-
-        if next_hop_channel.is_none() {
-            self.send_nack(packet, NackType::ErrorInRouting(next_hop_drone_id));
-            return;
-        }
-
-        self.send_packet(
-            packet,
-            next_hop_channel.expect("this should not be happening"),
-        );
     }
 
     fn send_packet(&self, packet: Packet, channel: &Sender<Packet>) {
         match packet.pack_type {
             PacketType::Nack(_) | PacketType::Ack(_) => {
+                info!(target: &self.log_channel, "logging packet to controller: {:?}", &packet);
                 self.controller_send
                     .send(DroneEvent::PacketSent(packet.clone()));
+                info!(target: &self.log_channel, "sending packet to drone: {:?}", &packet);
                 channel.send(packet);
             }
             PacketType::MsgFragment(_) => {
                 if self.pdr_distribution.sample(&mut rand::thread_rng()) {
+                    info!(target: &self.log_channel, "logging dropped fragment to controller: {:?}", &packet);
                     self.controller_send
                         .send(DroneEvent::PacketDropped(packet.clone()));
+                    info!(target: &self.log_channel, "sending dropped nack to drone: {:?}", &packet);
                     self.send_nack(packet, NackType::Dropped);
                 } else {
+                    info!(target: &self.log_channel, "logging fragment to controller: {:?}", &packet);
                     self.controller_send
                         .send(DroneEvent::PacketSent(packet.clone()));
+                    info!(target: &self.log_channel, "sending fragment to drone: {:?}", &packet);
                     channel.send(packet);
                 }
             }
             PacketType::FloodResponse(_) => {
+                info!(target: &self.log_channel, "logging flood response to controller: {:?}", &packet);
                 self.controller_send
                     .send(DroneEvent::PacketSent(packet.clone()));
+                info!(target: &self.log_channel, "sending flood response to initiator: {:?}", &packet);
                 channel.send(packet);
             }
-            PacketType::FloodRequest(_) => unreachable!(),
+            PacketType::FloodRequest(_) => {
+                error!(target: &self.log_channel, "Shouldn't be handling flood request here");
+                unreachable!();
+            }
         }
     }
 
@@ -238,13 +272,16 @@ impl MyDrone {
         sid: u64,
         mut flood_r: FloodRequest,
     ) {
-        let sender_tuple = flood_r.path_trace.last();
-        if sender_tuple.is_none() {
-            error!("Received a flood request with empty path_trace!!!");
+        let sender_tuple: &(NodeId, NodeType);
+
+        if let Some(tup) = flood_r.path_trace.last() {
+            sender_tuple = tup;
+        } else {
+            error!(target: &self.log_channel, "Received flood request with empty path trace");
             return;
         }
 
-        let &(sender_id, _) = sender_tuple.unwrap();
+        let &(sender_id, _) = sender_tuple;
         flood_r.increment(self.id, NodeType::Drone);
 
         if (self
@@ -255,11 +292,22 @@ impl MyDrone {
         {
             let mut new_packet: Packet = flood_r.generate_response(sid);
             new_packet.routing_header.increase_hop_index();
-            let next_hop: Option<NodeId> = new_packet.routing_header.current_hop();
-            self.packet_send.get(&next_hop.unwrap()).map_or_else(
-                || info!("what to say here?"),
+            let next_hop: NodeId;
+            if let Some(nh) = new_packet.routing_header.current_hop() {
+                next_hop = nh;
+            } else {
+                error!(target: &self.log_channel, "Current hop doesn't exist");
+                return;
+            }
+            self.packet_send.get(&next_hop).map_or_else(
+                || {
+                    error!(target: &self.log_channel, "Can't find sender channel");
+                } ,
                 |c: &Sender<Packet>| {
-                    self.controller_send.send(DroneEvent::PacketSent(new_packet.clone()));
+                    info!(target: &self.log_channel, "Logging flood response to controller {:?}", &new_packet);
+                    self.controller_send
+                        .send(DroneEvent::PacketSent(new_packet.clone()));
+                    info!(target: &self.log_channel, "sending flood response to drone: {:?}", &new_packet);
                     self.send_packet(new_packet, c);
                 },
             );
@@ -270,37 +318,36 @@ impl MyDrone {
         self.flood_history
             .push((flood_r.initiator_id, flood_r.flood_id));
         self.packet_send.iter().for_each(|(id, c)| {
-            if *id == sender_id {
-                return;
+            if *id != sender_id {
+                let new_packet =
+                Packet::new_flood_request(routing_header.clone(), sid, flood_r.clone());
+                info!(target: &self.log_channel, "logging new flood request to controller: {:?}", &new_packet);
+                self.controller_send.send(DroneEvent::PacketSent(new_packet.clone()));
+                info!(target: &self.log_channel, "sending new flood request to drone: {:?}", &new_packet);
+                c.send(new_packet);
             }
-
-            let new_packet = Packet::new_flood_request(
-                routing_header.clone(),
-                sid,
-                flood_r.clone(),
-            );
-
-            self.controller_send.send(DroneEvent::PacketSent(new_packet.clone()));
-
-            c.send(new_packet);
         });
     }
 
     fn handle_command(&mut self, command: DroneCommand) {
         match command {
-            // TODO why is only packet drop rate logging??
             DroneCommand::AddSender(node_id, sender) => {
+                info!(target: &self.log_channel, "Adding sender channel to {}", &node_id);
                 self.packet_send.insert(node_id, sender);
             }
             DroneCommand::SetPacketDropRate(pdr) => {
                 if let Ok(new_pdr) = Bernoulli::new(pdr as f64) {
                     self.pdr_distribution = new_pdr;
-                    return;
+                } else {
+                    warn!(target: &self.log_channel, "Invalid PDR {}, keeping old value", pdr);
                 }
-                warn!("PDR set by sim contr is not valid, keeping previous one");
             }
-            DroneCommand::Crash => self.state = State::Crashing,
+            DroneCommand::Crash => {
+                info!(target: &self.log_channel, "Received crash command");
+                self.state = State::Crashing
+            }
             DroneCommand::RemoveSender(node_id) => {
+                info!(target: &self.log_channel, "Removing sender channel to {}", &node_id);
                 self.packet_send.remove(&node_id);
             }
         }
@@ -309,12 +356,17 @@ impl MyDrone {
     fn handle_crash(&mut self, mut packet: Packet) {
         match packet.pack_type {
             PacketType::Nack(_) | PacketType::Ack(_) | PacketType::FloodResponse(_) => {
+                info!(target: &self.log_channel, "processing packet while crashing: {:?}", &packet);
                 self.handle_packet(packet);
             }
-            PacketType::FloodRequest(_) => {}
+            PacketType::FloodRequest(_) => {
+                info!(target: &self.log_channel, "got flood request while crashing, dropping: {:?}", &packet);
+                //info!(target: &self.log_channel, "logging dropped flood request to controller: {:?}", &packet);
+                //self.controller_send.send(DroneEvent::PacketDropped(packet));
+            }
             PacketType::MsgFragment(_) => {
-                // TODO check if you can remove it
                 packet.routing_header.increase_hop_index();
+                info!(target: &self.log_channel, "crashing, sending error in routing, can't process fragment: {:?}", &packet);
                 self.send_nack(packet, NackType::ErrorInRouting(self.id));
             }
         }
@@ -769,11 +821,7 @@ mod drone_tests {
                     drone2.run();
                 });
         */
-        let msg = Packet::new_ack(
-            SourceRoutingHeader::new(vec![1, 11, 45], 1),
-            56,
-            1
-        );
+        let msg = Packet::new_ack(SourceRoutingHeader::new(vec![1, 11, 45], 1), 56, 1);
 
         // "Client" sends packet to the drone
         d_send.send(msg.clone()).unwrap();
@@ -831,13 +879,14 @@ mod drone_tests {
         let msg = Packet::new_flood_response(
             SourceRoutingHeader::new(vec![1, 11, 45], 1),
             56,
-            FloodResponse { flood_id: 1,
+            FloodResponse {
+                flood_id: 1,
                 path_trace: vec![
-                    (80,NodeType::Drone),
-                    (90,NodeType::Drone),
-                    (99,NodeType::Drone)
-                ]
-            }
+                    (80, NodeType::Drone),
+                    (90, NodeType::Drone),
+                    (99, NodeType::Drone),
+                ],
+            },
         );
 
         // "Client" sends packet to the drone
@@ -847,10 +896,6 @@ mod drone_tests {
             DroneEvent::ControllerShortcut(msg)
         )
     }
-
-
-
-
 }
 
 fn main() {}
