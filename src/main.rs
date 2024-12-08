@@ -177,6 +177,7 @@ impl MyDrone {
                             info!(target: &self.log_channel, "\tLogging and sending Nack packet: {:?}", nack);
                             self.controller_send
                                 .send(DroneEvent::PacketSent(nack.clone()));
+                            info!(target: &self.log_channel, "sending nack back: {:?}", &nack);
                             s.send(nack);
                         },
                     )
@@ -238,6 +239,7 @@ impl MyDrone {
     fn send_packet(&self, packet: Packet, channel: &Sender<Packet>) {
         match packet.pack_type {
             PacketType::Nack(_) | PacketType::Ack(_) => {
+                info!(target: &self.log_channel, "logging packet to controller: {:?}", &packet);
                 self.controller_send
                     .send(DroneEvent::PacketSent(packet.clone()));
                 info!(target: &self.log_channel, "\tLogging and sending packet to {}", packet.routing_header.current_hop().expect("If we panic here there's a bug :("));
@@ -245,11 +247,13 @@ impl MyDrone {
             }
             PacketType::MsgFragment(_) => {
                 if self.pdr_distribution.sample(&mut rand::thread_rng()) {
+                    info!(target: &self.log_channel, "logging dropped fragment to controller: {:?}", &packet);
                     self.controller_send
                         .send(DroneEvent::PacketDropped(packet.clone()));
                     info!(target: &self.log_channel, "\tPacket fragment dropped! Creating Nack");
                     self.send_nack(packet, NackType::Dropped);
                 } else {
+                    info!(target: &self.log_channel, "logging fragment to controller: {:?}", &packet);
                     self.controller_send
                         .send(DroneEvent::PacketSent(packet.clone()));
                     info!(target: &self.log_channel, "\tLogging and sending fragment to: {}", packet.routing_header.current_hop().expect("If we panic here there's a bug :("));
@@ -257,6 +261,7 @@ impl MyDrone {
                 }
             }
             PacketType::FloodResponse(_) => {
+                info!(target: &self.log_channel, "logging flood response to controller: {:?}", &packet);
                 self.controller_send
                     .send(DroneEvent::PacketSent(packet.clone()));
                 info!(target: &self.log_channel, "\tLogging and sending flood response to: {}", packet.routing_header.current_hop().expect("If we panic here there's a bug :("));
@@ -351,14 +356,17 @@ impl MyDrone {
     fn handle_crash(&mut self, mut packet: Packet) {
         match packet.pack_type {
             PacketType::Nack(_) | PacketType::Ack(_) | PacketType::FloodResponse(_) => {
+                info!(target: &self.log_channel, "processing packet while crashing: {:?}", &packet);
                 self.handle_packet(packet);
             }
             PacketType::FloodRequest(_) => {
-                info!(target: &self.log_channel, "\tGot flood request while crashing, ignoring");
+                info!(target: &self.log_channel, "got flood request while crashing, dropping: {:?}", &packet);
+                //info!(target: &self.log_channel, "logging dropped flood request to controller: {:?}", &packet);
+                //self.controller_send.send(DroneEvent::PacketDropped(packet));
             }
             PacketType::MsgFragment(_) => {
                 packet.routing_header.increase_hop_index();
-                info!(target: &self.log_channel, "\tCrashing, sending Nack error in routing, can't process fragment",);
+                info!(target: &self.log_channel, "crashing, sending error in routing, can't process fragment: {:?}", &packet);
                 self.send_nack(packet, NackType::ErrorInRouting(self.id));
             }
         }
