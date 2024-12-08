@@ -398,6 +398,16 @@ pub mod drone_tests {
     pub fn test_fragment_forward() {
         wg_2024::tests::generic_fragment_forward::<MyDrone>();
     }
+    
+    #[test]
+    pub fn test_chain_fragment_ack() {
+        wg_2024::tests::generic_chain_fragment_ack::<MyDrone>();
+    }
+    
+    #[test]
+    pub fn test_chain_fragment_drop() {
+        wg_2024::tests::generic_chain_fragment_drop::<MyDrone>();
+    }
 
     #[test]
     pub fn test_flooding_simple_topology_with_initiator_in_path_trace() {
