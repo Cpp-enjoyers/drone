@@ -1,13 +1,11 @@
 #![allow(unused)]
 
-mod ring_buffer;
 use crossbeam_channel::{select, select_biased, unbounded, Receiver, Sender};
 use log::{error, info, trace, warn, LevelFilter};
 use rand::distributions::Bernoulli;
 use rand::prelude::*;
-use ring_buffer::RingBuffer;
-use std::collections::HashMap;
-use std::{default, fs, thread};
+use std::collections::{HashMap, HashSet};
+use std::{default, env, fs, thread};
 use wg_2024::config::Config;
 use wg_2024::controller::{DroneCommand, DroneEvent};
 use wg_2024::drone::Drone;
@@ -17,7 +15,13 @@ use wg_2024::tests::*;
 
 const RING_BUFF_SZ: usize = 64;
 
-// TODO handle c.send() errors, just log the error I guess
+#[cfg(feature = "unlimited_buffer")]
+type RingBuffer<T> = HashSet<T>;
+
+#[cfg(not(feature = "unlimited_buffer"))]
+mod ring_buffer;
+#[cfg(not(feature = "unlimited_buffer"))]
+use ring_buffer::RingBuffer;
 
 #[derive(Debug, PartialEq)]
 enum State {
@@ -50,8 +54,7 @@ pub struct MyDrone {
     pdr_distribution: Bernoulli,
     packet_send: HashMap<NodeId, Sender<Packet>>,
     state: State,
-    // ! TODO use hashmap if necessary
-    flood_history: RingBuffer<(NodeId, u64)>,
+    flood_history: HashMap<NodeId, RingBuffer<u64>>,
 }
 
 impl Drone for MyDrone {
@@ -87,7 +90,7 @@ impl Drone for MyDrone {
             packet_send,
             pdr_distribution,
             state: State::Running,
-            flood_history: RingBuffer::new_with_size(RING_BUFF_SZ),
+            flood_history: HashMap::new(),
         }
     }
 
@@ -130,13 +133,14 @@ impl MyDrone {
     fn send_nack(&self, mut packet: Packet, nack_type: NackType) {
         let mut source_header: SourceRoutingHeader = match packet
             .routing_header
-            .sub_route(0..packet.routing_header.hop_index) {
-                Some(sh) => sh,
-                None => {
-                    error!(target: &self.log_channel, "\tCan't invert source routing header: {}. Dropping Nack packet", packet.routing_header);
-                    return;
-                }
-            };
+            .sub_route(0..packet.routing_header.hop_index)
+        {
+            Some(sh) => sh,
+            None => {
+                error!(target: &self.log_channel, "\tCan't invert source routing header: {}. Dropping Nack packet", packet.routing_header);
+                return;
+            }
+        };
         source_header.reset_hop_index();
         source_header.reverse();
         source_header.hop_index = 1;
@@ -259,7 +263,8 @@ impl MyDrone {
                 channel.send(packet);
             }
             PacketType::FloodRequest(_) => {
-                self.controller_send.send(DroneEvent::PacketSent(packet.clone()));
+                self.controller_send
+                    .send(DroneEvent::PacketSent(packet.clone()));
                 info!(target: &self.log_channel, "\tLogging and forwarding flood request: {}", packet);
                 channel.send(packet);
             }
@@ -283,16 +288,19 @@ impl MyDrone {
         let (sender_id, _) = sender_tuple;
         flood_r.increment(self.id, NodeType::Drone);
 
-        if (self
+        let ring_buff = self
             .flood_history
-            .contains(&(flood_r.initiator_id, flood_r.flood_id))
-            || self.packet_send.len() <= 1)
-        // cargo fmt is clearly bonkers
-        {
+            .entry(flood_r.initiator_id)
+            .or_insert_with(|| RingBuffer::with_capacity(RING_BUFF_SZ));
+
+        if (ring_buff.contains(&flood_r.flood_id) || self.packet_send.len() <= 1) {
             let mut new_packet: Packet = flood_r.generate_response(sid);
             info!(target: &self.log_channel, "\tGenerated flood response: {}", new_packet);
             new_packet.routing_header.increase_hop_index();
-            let next_hop: NodeId = new_packet.routing_header.current_hop().expect("If this panics here the WG code is bugged");
+            let next_hop: NodeId = new_packet
+                .routing_header
+                .current_hop()
+                .expect("If this panics here the code is bugged");
             self.packet_send.get(&next_hop).map_or_else(
                 || {
                     error!(target: &self.log_channel, "\tCan't find sender channel for flood response. Dropping packet");
@@ -305,12 +313,11 @@ impl MyDrone {
         }
 
         // TODO add the check if the neighbour exists in debug mode
-        self.flood_history
-            .push((flood_r.initiator_id, flood_r.flood_id));
+        ring_buff.insert(flood_r.flood_id);
         self.packet_send.iter().for_each(|(id, c)| {
             if *id != sender_id {
                 let new_packet =
-                Packet::new_flood_request(routing_header.clone(), sid, flood_r.clone());
+                    Packet::new_flood_request(routing_header.clone(), sid, flood_r.clone());
                 self.send_packet(new_packet, c);
             }
         });
@@ -385,7 +392,7 @@ mod drone_tests {
     }
 
     #[test]
-    fn test_flooding_simple_topology() {
+    fn test_flooding_simple_topology_with_initiator_in_path_trace() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -474,7 +481,120 @@ mod drone_tests {
         for _ in 0..3 {
             match c_recv.recv().unwrap().pack_type {
                 PacketType::FloodResponse(f) => {
-                    println!("{:?}", f.path_trace);
+                    println!("CLIENT RECEIVED: {:?}", f.path_trace);
+                }
+                _ => {}
+            }
+        }
+
+        // assert_eq!(
+        //     c_recv.recv().unwrap(),
+        //     Packet {
+        //         pack_type: PacketType::FloodResponse(FloodResponse { flood_id: 56, path_trace: vec![(1, NodeType::Client), (11, NodeType::Drone), (12, NodeType::Drone)] },),
+        //         routing_header: SourceRoutingHeader {
+        //             hop_index: 2,
+        //             hops: vec![12, 11, 1],
+        //         },
+        //         session_id: 23,
+        //     }
+        // );
+    }
+
+    #[test]
+    fn test_flooding_simple_topology_without_initiator_in_path_trace() {
+        // Client<1> channels
+        let (c_send, c_recv) = unbounded();
+        // Drone 11
+        let (d_send, d_recv) = unbounded();
+        // Drone 12
+        let (d12_send, d12_recv) = unbounded();
+        // Drone 13
+        let (d13_send, d13_recv) = unbounded();
+        // Drone 14
+        let (d14_send, d14_recv) = unbounded();
+        // SC - needed to not make the drone crash
+        let (_d_command_send, d_command_recv) = unbounded();
+
+        // Drone 11
+        let neighbours11 = HashMap::from([
+            (12, d12_send.clone()),
+            (13, d13_send.clone()),
+            (14, d14_send.clone()),
+            (1, c_send.clone()),
+        ]);
+        let mut drone = MyDrone::new(
+            11,
+            unbounded().0,
+            d_command_recv.clone(),
+            d_recv.clone(),
+            neighbours11,
+            0.0,
+        );
+        // Drone 12
+        let neighbours12 = HashMap::from([(11, d_send.clone())]);
+        let mut drone2 = MyDrone::new(
+            12,
+            unbounded().0,
+            d_command_recv.clone(),
+            d12_recv.clone(),
+            neighbours12,
+            0.0,
+        );
+        // Drone 13
+        let neighbours13 = HashMap::from([(11, d_send.clone()), (14, d14_send.clone())]);
+        let mut drone3 = MyDrone::new(
+            13,
+            unbounded().0,
+            d_command_recv.clone(),
+            d13_recv.clone(),
+            neighbours13,
+            0.0,
+        );
+        // Drone 14
+        let neighbours14 = HashMap::from([(11, d_send.clone()), (13, d13_send.clone())]);
+        let mut drone4 = MyDrone::new(
+            14,
+            unbounded().0,
+            d_command_recv.clone(),
+            d14_recv.clone(),
+            neighbours14,
+            0.0,
+        );
+
+        // Spawn the drone's run method in a separate thread
+        thread::spawn(move || {
+            drone.run();
+        });
+
+        thread::spawn(move || {
+            drone2.run();
+        });
+
+        thread::spawn(move || {
+            drone3.run();
+        });
+
+        thread::spawn(move || {
+            drone4.run();
+        });
+
+        let mut msg = Packet::new_flood_request(
+            SourceRoutingHeader::new(vec![], 15),
+            23,
+            FloodRequest {
+                flood_id: 56,
+                initiator_id: 1,
+                path_trace: vec![],
+            },
+        );
+
+        // "Client" sends packet to the drone
+        d_send.send(msg.clone()).unwrap();
+
+        for _ in 0..3 {
+            match c_recv.recv().unwrap().pack_type {
+                PacketType::FloodResponse(f) => {
+                    println!("CLIENT RECEIVED: {:?}", f.path_trace);
                 }
                 _ => {}
             }
@@ -943,7 +1063,6 @@ mod drone_tests {
             }
             _ => {}
         }
-
     }
 
     #[test]
@@ -1006,11 +1125,10 @@ mod drone_tests {
             }
             _ => {}
         }
-
     }
 
     #[test]
-    fn test_set_pdr(){
+    fn test_set_pdr() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -1088,7 +1206,7 @@ mod drone_tests {
     }
 
     #[test]
-    fn test_crash(){
+    fn test_crash() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -1106,7 +1224,11 @@ mod drone_tests {
         let (d14_tx_cmd, d14_rx_cmd) = unbounded();
 
         // Drone 11
-        let neighbours11 = HashMap::from([(12, d12_send.clone()), (1, c_send.clone()), (14, d14_send.clone())]);
+        let neighbours11 = HashMap::from([
+            (12, d12_send.clone()),
+            (1, c_send.clone()),
+            (14, d14_send.clone()),
+        ]);
         let mut drone = MyDrone::new(
             11,
             unbounded().0,
@@ -1179,7 +1301,15 @@ mod drone_tests {
         assert_eq!(
             c_recv.recv().unwrap(),
             Packet {
-                pack_type: PacketType::FloodResponse(FloodResponse { flood_id: 56, path_trace: vec![(1, NodeType::Client), (11, NodeType::Drone), (12, NodeType::Drone), (13, NodeType::Drone)] },),
+                pack_type: PacketType::FloodResponse(FloodResponse {
+                    flood_id: 56,
+                    path_trace: vec![
+                        (1, NodeType::Client),
+                        (11, NodeType::Drone),
+                        (12, NodeType::Drone),
+                        (13, NodeType::Drone)
+                    ]
+                },),
                 routing_header: SourceRoutingHeader {
                     hop_index: 3,
                     hops: vec![13, 12, 11, 1],
@@ -1188,9 +1318,6 @@ mod drone_tests {
             }
         );
     }
-
-
-
 }
 fn main() {}
 
