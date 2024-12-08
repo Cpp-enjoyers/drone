@@ -13,7 +13,7 @@ use wg_2024::network::{NodeId, SourceRoutingHeader};
 use wg_2024::packet::*;
 use wg_2024::tests::*;
 
-pub const RING_BUFF_SZ: usize = 64;
+const RING_BUFF_SZ: usize = 64;
 
 #[cfg(feature = "unlimited_buffer")]
 type RingBuffer<T> = HashSet<T>;
@@ -177,7 +177,6 @@ impl MyDrone {
                             info!(target: &self.log_channel, "\tLogging and sending Nack packet: {:?}", nack);
                             self.controller_send
                                 .send(DroneEvent::PacketSent(nack.clone()));
-                            info!(target: &self.log_channel, "sending nack back: {:?}", &nack);
                             s.send(nack);
                         },
                     )
@@ -239,7 +238,6 @@ impl MyDrone {
     fn send_packet(&self, packet: Packet, channel: &Sender<Packet>) {
         match packet.pack_type {
             PacketType::Nack(_) | PacketType::Ack(_) => {
-                info!(target: &self.log_channel, "logging packet to controller: {:?}", &packet);
                 self.controller_send
                     .send(DroneEvent::PacketSent(packet.clone()));
                 info!(target: &self.log_channel, "\tLogging and sending packet to {}", packet.routing_header.current_hop().expect("If we panic here there's a bug :("));
@@ -247,13 +245,13 @@ impl MyDrone {
             }
             PacketType::MsgFragment(_) => {
                 if self.pdr_distribution.sample(&mut rand::thread_rng()) {
-                    info!(target: &self.log_channel, "logging dropped fragment to controller: {:?}", &packet);
+                    let mut to_send: Packet = packet.clone();
+                    to_send.routing_header.decrease_hop_index();
                     self.controller_send
-                        .send(DroneEvent::PacketDropped(packet.clone()));
+                        .send(DroneEvent::PacketDropped(to_send));
                     info!(target: &self.log_channel, "\tPacket fragment dropped! Creating Nack");
                     self.send_nack(packet, NackType::Dropped);
                 } else {
-                    info!(target: &self.log_channel, "logging fragment to controller: {:?}", &packet);
                     self.controller_send
                         .send(DroneEvent::PacketSent(packet.clone()));
                     info!(target: &self.log_channel, "\tLogging and sending fragment to: {}", packet.routing_header.current_hop().expect("If we panic here there's a bug :("));
@@ -261,7 +259,6 @@ impl MyDrone {
                 }
             }
             PacketType::FloodResponse(_) => {
-                info!(target: &self.log_channel, "logging flood response to controller: {:?}", &packet);
                 self.controller_send
                     .send(DroneEvent::PacketSent(packet.clone()));
                 info!(target: &self.log_channel, "\tLogging and sending flood response to: {}", packet.routing_header.current_hop().expect("If we panic here there's a bug :("));
@@ -356,17 +353,14 @@ impl MyDrone {
     fn handle_crash(&mut self, mut packet: Packet) {
         match packet.pack_type {
             PacketType::Nack(_) | PacketType::Ack(_) | PacketType::FloodResponse(_) => {
-                info!(target: &self.log_channel, "processing packet while crashing: {:?}", &packet);
                 self.handle_packet(packet);
             }
             PacketType::FloodRequest(_) => {
-                info!(target: &self.log_channel, "got flood request while crashing, dropping: {:?}", &packet);
-                //info!(target: &self.log_channel, "logging dropped flood request to controller: {:?}", &packet);
-                //self.controller_send.send(DroneEvent::PacketDropped(packet));
+                info!(target: &self.log_channel, "\tGot flood request while crashing, ignoring");
             }
             PacketType::MsgFragment(_) => {
                 packet.routing_header.increase_hop_index();
-                info!(target: &self.log_channel, "crashing, sending error in routing, can't process fragment: {:?}", &packet);
+                info!(target: &self.log_channel, "\tCrashing, sending Nack error in routing, can't process fragment",);
                 self.send_nack(packet, NackType::ErrorInRouting(self.id));
             }
         }
@@ -384,21 +378,11 @@ impl MyDrone {
 }
 
 #[cfg(test)]
-pub mod drone_tests {
+mod drone_tests {
     use wg_2024::{config::Client, tests};
 
     use crate::*;
 
-    #[test]
-    pub fn test_fragment_drop() {
-        wg_2024::tests::generic_fragment_drop::<MyDrone>();
-    }
-
-    #[test]
-    pub fn test_fragment_forward() {
-        wg_2024::tests::generic_fragment_forward::<MyDrone>();
-    }
-    
     #[test]
     pub fn test_chain_fragment_ack() {
         wg_2024::tests::generic_chain_fragment_ack::<MyDrone>();
@@ -410,7 +394,17 @@ pub mod drone_tests {
     }
 
     #[test]
-    pub fn test_flooding_simple_topology_with_initiator_in_path_trace() {
+    fn test_fragment_drop() {
+        wg_2024::tests::generic_fragment_drop::<MyDrone>();
+    }
+
+    #[test]
+    fn test_fragment_forward() {
+        wg_2024::tests::generic_fragment_forward::<MyDrone>();
+    }
+
+    #[test]
+    fn test_flooding_simple_topology_with_initiator_in_path_trace() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -519,7 +513,7 @@ pub mod drone_tests {
     }
 
     #[test]
-    pub fn test_flooding_simple_topology_without_initiator_in_path_trace() {
+    fn test_flooding_simple_topology_without_initiator_in_path_trace() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -632,7 +626,7 @@ pub mod drone_tests {
     }
 
     #[test]
-    pub fn test_destination_is_drone() {
+    fn test_destination_is_drone() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -701,7 +695,7 @@ pub mod drone_tests {
     }
 
     #[test]
-    pub fn test_unexpected_recipient() {
+    fn test_unexpected_recipient() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -770,7 +764,7 @@ pub mod drone_tests {
     }
 
     #[test]
-    pub fn test_error_in_routing() {
+    fn test_error_in_routing() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -839,7 +833,7 @@ pub mod drone_tests {
     }
 
     #[test]
-    pub fn test_nack_error_in_routing() {
+    fn test_nack_error_in_routing() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -904,7 +898,7 @@ pub mod drone_tests {
     }
 
     #[test]
-    pub fn test_ack_error_in_routing() {
+    fn test_ack_error_in_routing() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -959,7 +953,7 @@ pub mod drone_tests {
     }
 
     #[test]
-    pub fn test_flood_response_error_in_routing() {
+    fn test_flood_response_error_in_routing() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -1021,7 +1015,7 @@ pub mod drone_tests {
     }
 
     #[test]
-    pub fn test_add_new_drone() {
+    fn test_add_new_drone() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -1084,7 +1078,7 @@ pub mod drone_tests {
     }
 
     #[test]
-    pub fn test_remove_drone() {
+    fn test_remove_drone() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -1146,7 +1140,7 @@ pub mod drone_tests {
     }
 
     #[test]
-    pub fn test_set_pdr() {
+    fn test_set_pdr() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -1224,7 +1218,7 @@ pub mod drone_tests {
     }
 
     #[test]
-    pub fn test_crash() {
+    fn test_crash() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
