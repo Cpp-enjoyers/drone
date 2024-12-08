@@ -1,6 +1,6 @@
 [package]
-name = "drones"
-version = "0.1.0"
+name = "ap2024_unitn_cppenjoyers_drone"
+version = "0.9.0"
 edition = "2021"
 
 [dependencies]
@@ -16,5 +16,5 @@ unlimited_buffer = []
 
 
 [lib]
-name = "cppenjoyers_drone"
+name = "ap2024_unitn_cppenjoyers_drone"
 path = "src/lib.rs"
