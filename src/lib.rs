@@ -13,7 +13,7 @@ use wg_2024::network::{NodeId, SourceRoutingHeader};
 use wg_2024::packet::*;
 use wg_2024::tests::*;
 
-const RING_BUFF_SZ: usize = 64;
+pub const RING_BUFF_SZ: usize = 64;
 
 #[cfg(feature = "unlimited_buffer")]
 type RingBuffer<T> = HashSet<T>;
@@ -384,23 +384,23 @@ impl MyDrone {
 }
 
 #[cfg(test)]
-mod drone_tests {
+pub mod drone_tests {
     use wg_2024::{config::Client, tests};
 
     use crate::*;
 
     #[test]
-    fn test_fragment_drop() {
+    pub fn test_fragment_drop() {
         wg_2024::tests::generic_fragment_drop::<MyDrone>();
     }
 
     #[test]
-    fn test_fragment_forward() {
+    pub fn test_fragment_forward() {
         wg_2024::tests::generic_fragment_forward::<MyDrone>();
     }
 
     #[test]
-    fn test_flooding_simple_topology_with_initiator_in_path_trace() {
+    pub fn test_flooding_simple_topology_with_initiator_in_path_trace() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -509,7 +509,7 @@ mod drone_tests {
     }
 
     #[test]
-    fn test_flooding_simple_topology_without_initiator_in_path_trace() {
+    pub fn test_flooding_simple_topology_without_initiator_in_path_trace() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -622,7 +622,7 @@ mod drone_tests {
     }
 
     #[test]
-    fn test_destination_is_drone() {
+    pub fn test_destination_is_drone() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -691,7 +691,7 @@ mod drone_tests {
     }
 
     #[test]
-    fn test_unexpected_recipient() {
+    pub fn test_unexpected_recipient() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -760,7 +760,7 @@ mod drone_tests {
     }
 
     #[test]
-    fn test_error_in_routing() {
+    pub fn test_error_in_routing() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -829,7 +829,7 @@ mod drone_tests {
     }
 
     #[test]
-    fn test_nack_error_in_routing() {
+    pub fn test_nack_error_in_routing() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -894,7 +894,7 @@ mod drone_tests {
     }
 
     #[test]
-    fn test_ack_error_in_routing() {
+    pub fn test_ack_error_in_routing() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -949,7 +949,7 @@ mod drone_tests {
     }
 
     #[test]
-    fn test_flood_response_error_in_routing() {
+    pub fn test_flood_response_error_in_routing() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -1011,7 +1011,7 @@ mod drone_tests {
     }
 
     #[test]
-    fn test_add_new_drone() {
+    pub fn test_add_new_drone() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -1074,7 +1074,7 @@ mod drone_tests {
     }
 
     #[test]
-    fn test_remove_drone() {
+    pub fn test_remove_drone() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -1136,7 +1136,7 @@ mod drone_tests {
     }
 
     #[test]
-    fn test_set_pdr() {
+    pub fn test_set_pdr() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -1214,7 +1214,7 @@ mod drone_tests {
     }
 
     #[test]
-    fn test_crash() {
+    pub fn test_crash() {
         // Client<1> channels
         let (c_send, c_recv) = unbounded();
         // Drone 11
@@ -1327,79 +1327,3 @@ mod drone_tests {
         );
     }
 }
-fn main() {}
-
-/*
-struct SimulationController {
-    drones: HashMap<NodeId, Sender<DroneCommand>>,
-    node_event_recv: Receiver<DroneEvent>,
-}
-
-impl SimulationController {
-    fn crash_all(&mut self) {
-        for (_, sender) in self.drones.iter() {
-            sender.send(DroneCommand::Crash).unwrap();
-        }
-    }
-}
-
-fn parse_config(file: &str) -> Config {
-    let file_str = fs::read_to_string(file).unwrap();
-    toml::from_str(&file_str).unwrap()
-}
-
-fn main() {
-    let config = parse_config("./config.toml");
-
-    let mut controller_drones = HashMap::new();
-    let (node_event_send, node_event_recv) = unbounded();
-
-    let mut packet_channels = HashMap::new();
-    for drone in config.drone.iter() {
-        packet_channels.insert(drone.id, unbounded());
-    }
-    for client in config.client.iter() {
-        packet_channels.insert(client.id, unbounded());
-    }
-    for server in config.server.iter() {
-        packet_channels.insert(server.id, unbounded());
-    }
-
-    let mut handles = Vec::new();
-    for drone in config.drone.into_iter() {
-        // controller
-        let (controller_drone_send, controller_drone_recv) = unbounded();
-        controller_drones.insert(drone.id, controller_drone_send);
-        let node_event_send = node_event_send.clone();
-        // packet
-        let packet_recv = packet_channels[&drone.id].1.clone();
-        let packet_send = drone
-            .connected_node_ids
-            .into_iter()
-            .map(|id| (id, packet_channels[&id].0.clone()))
-            .collect();
-
-        handles.push(thread::spawn(move || {
-            let mut drone = MyDrone::new(
-                drone.id,
-                node_event_send,
-                controller_drone_recv,
-                packet_recv,
-                packet_send,
-                drone.pdr,
-            );
-
-            drone.run();
-        }));
-    }
-    let mut controller = SimulationController {
-        drones: controller_drones,
-        node_event_recv,
-    };
-    controller.crash_all();
-
-    while let Some(handle) = handles.pop() {
-        handle.join().unwrap();
-    }
-}
- */
