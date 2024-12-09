@@ -17,3 +17,6 @@ unlimited_buffer = []
 [lib]
 name = "ap2024_unitn_cppenjoyers_drone"
 path = "src/lib.rs"
+
+[dev-dependencies]
+drone_tester = { git = "https://github.com/daw-dev/drone-tester.git" }
