@@ -8,22 +8,22 @@ mod drone_tests {
 
     #[test]
     pub fn test_chain_fragment_ack() {
-        wg_2024::tests::generic_chain_fragment_ack::<MyDrone>();
+        wg_2024::tests::generic_chain_fragment_ack::<CppEnjoyersDrone>();
     }
 
     #[test]
     pub fn test_chain_fragment_drop() {
-        wg_2024::tests::generic_chain_fragment_drop::<MyDrone>();
+        wg_2024::tests::generic_chain_fragment_drop::<CppEnjoyersDrone>();
     }
 
     #[test]
     fn test_fragment_drop() {
-        wg_2024::tests::generic_fragment_drop::<MyDrone>();
+        wg_2024::tests::generic_fragment_drop::<CppEnjoyersDrone>();
     }
 
     #[test]
     fn test_fragment_forward() {
-        wg_2024::tests::generic_fragment_forward::<MyDrone>();
+        wg_2024::tests::generic_fragment_forward::<CppEnjoyersDrone>();
     }
 
     #[test]
@@ -48,7 +48,7 @@ mod drone_tests {
             (14, d14_send.clone()),
             (1, c_send.clone()),
         ]);
-        let mut drone = MyDrone::new(
+        let mut drone = CppEnjoyersDrone::new(
             11,
             unbounded().0,
             d_command_recv.clone(),
@@ -58,7 +58,7 @@ mod drone_tests {
         );
         // Drone 12
         let neighbours12 = HashMap::from([(11, d_send.clone())]);
-        let mut drone2 = MyDrone::new(
+        let mut drone2 = CppEnjoyersDrone::new(
             12,
             unbounded().0,
             d_command_recv.clone(),
@@ -68,7 +68,7 @@ mod drone_tests {
         );
         // Drone 13
         let neighbours13 = HashMap::from([(11, d_send.clone()), (14, d14_send.clone())]);
-        let mut drone3 = MyDrone::new(
+        let mut drone3 = CppEnjoyersDrone::new(
             13,
             unbounded().0,
             d_command_recv.clone(),
@@ -78,7 +78,7 @@ mod drone_tests {
         );
         // Drone 14
         let neighbours14 = HashMap::from([(11, d_send.clone()), (13, d13_send.clone())]);
-        let mut drone4 = MyDrone::new(
+        let mut drone4 = CppEnjoyersDrone::new(
             14,
             unbounded().0,
             d_command_recv.clone(),
@@ -157,7 +157,7 @@ mod drone_tests {
             (14, d14_send.clone()),
             (1, c_send.clone()),
         ]);
-        let mut drone = MyDrone::new(
+        let mut drone = CppEnjoyersDrone::new(
             11,
             unbounded().0,
             d_command_recv.clone(),
@@ -167,7 +167,7 @@ mod drone_tests {
         );
         // Drone 12
         let neighbours12 = HashMap::from([(11, d_send.clone())]);
-        let mut drone2 = MyDrone::new(
+        let mut drone2 = CppEnjoyersDrone::new(
             12,
             unbounded().0,
             d_command_recv.clone(),
@@ -177,7 +177,7 @@ mod drone_tests {
         );
         // Drone 13
         let neighbours13 = HashMap::from([(11, d_send.clone()), (14, d14_send.clone())]);
-        let mut drone3 = MyDrone::new(
+        let mut drone3 = CppEnjoyersDrone::new(
             13,
             unbounded().0,
             d_command_recv.clone(),
@@ -187,7 +187,7 @@ mod drone_tests {
         );
         // Drone 14
         let neighbours14 = HashMap::from([(11, d_send.clone()), (13, d13_send.clone())]);
-        let mut drone4 = MyDrone::new(
+        let mut drone4 = CppEnjoyersDrone::new(
             14,
             unbounded().0,
             d_command_recv.clone(),
@@ -261,7 +261,7 @@ mod drone_tests {
 
         // Drone 11
         let neighbours11 = HashMap::from([(12, d12_send.clone()), (1, c_send.clone())]);
-        let mut drone = MyDrone::new(
+        let mut drone = CppEnjoyersDrone::new(
             11,
             unbounded().0,
             d_command_recv.clone(),
@@ -271,7 +271,7 @@ mod drone_tests {
         );
         // Drone 12
         let neighbours12 = HashMap::from([(11, d_send.clone())]);
-        let mut drone2 = MyDrone::new(
+        let mut drone2 = CppEnjoyersDrone::new(
             12,
             unbounded().0,
             d_command_recv.clone(),
@@ -330,7 +330,7 @@ mod drone_tests {
 
         // Drone 11
         let neighbours11 = HashMap::from([(12, d12_send.clone()), (1, c_send.clone())]);
-        let mut drone = MyDrone::new(
+        let mut drone = CppEnjoyersDrone::new(
             11,
             unbounded().0,
             d_command_recv.clone(),
@@ -340,7 +340,7 @@ mod drone_tests {
         );
         // Drone 12
         let neighbours12 = HashMap::from([(11, d_send.clone())]);
-        let mut drone2 = MyDrone::new(
+        let mut drone2 = CppEnjoyersDrone::new(
             12,
             unbounded().0,
             d_command_recv.clone(),
@@ -399,7 +399,7 @@ mod drone_tests {
 
         // Drone 11
         let neighbours11 = HashMap::from([(12, d12_send.clone()), (1, c_send.clone())]);
-        let mut drone = MyDrone::new(
+        let mut drone = CppEnjoyersDrone::new(
             11,
             unbounded().0,
             d_command_recv.clone(),
@@ -409,7 +409,7 @@ mod drone_tests {
         );
         // Drone 12
         let neighbours12 = HashMap::from([(11, d_send.clone())]);
-        let mut drone2 = MyDrone::new(
+        let mut drone2 = CppEnjoyersDrone::new(
             12,
             unbounded().0,
             d_command_recv.clone(),
@@ -469,7 +469,7 @@ mod drone_tests {
 
         // Drone 11
         let neighbours11 = HashMap::from([(12, d12_send.clone()), (1, c_send.clone())]);
-        let mut drone = MyDrone::new(
+        let mut drone = CppEnjoyersDrone::new(
             11,
             tx_event.clone(),
             rx_cmd.clone(),
@@ -479,7 +479,7 @@ mod drone_tests {
         );
         // Drone 12
         let neighbours12 = HashMap::from([(11, d_send.clone())]);
-        let mut drone2 = MyDrone::new(
+        let mut drone2 = CppEnjoyersDrone::new(
             12,
             tx_event.clone(),
             rx_cmd.clone(),
@@ -534,7 +534,7 @@ mod drone_tests {
 
         // Drone 11
         let neighbours11 = HashMap::from([(12, d12_send.clone()), (1, c_send.clone())]);
-        let mut drone = MyDrone::new(
+        let mut drone = CppEnjoyersDrone::new(
             11,
             tx_event.clone(),
             rx_cmd.clone(),
@@ -544,7 +544,7 @@ mod drone_tests {
         );
         // Drone 12
         let neighbours12 = HashMap::from([(11, d_send.clone())]);
-        let mut drone2 = MyDrone::new(
+        let mut drone2 = CppEnjoyersDrone::new(
             12,
             tx_event.clone(),
             rx_cmd.clone(),
@@ -589,7 +589,7 @@ mod drone_tests {
 
         // Drone 11
         let neighbours11 = HashMap::from([(12, d12_send.clone()), (1, c_send.clone())]);
-        let mut drone = MyDrone::new(
+        let mut drone = CppEnjoyersDrone::new(
             11,
             tx_event.clone(),
             rx_cmd.clone(),
@@ -599,7 +599,7 @@ mod drone_tests {
         );
         // Drone 12
         let neighbours12 = HashMap::from([(11, d_send.clone())]);
-        let mut drone2 = MyDrone::new(
+        let mut drone2 = CppEnjoyersDrone::new(
             12,
             tx_event.clone(),
             rx_cmd.clone(),
@@ -652,7 +652,7 @@ mod drone_tests {
 
         // Drone 11
         let neighbours11 = HashMap::from([(12, d12_send.clone()), (1, c_send.clone())]);
-        let mut drone = MyDrone::new(
+        let mut drone = CppEnjoyersDrone::new(
             11,
             tx_event.clone(),
             rx_cmd.clone(),
@@ -662,7 +662,7 @@ mod drone_tests {
         );
         // Drone 12
         let neighbours12 = HashMap::from([(11, d_send.clone())]);
-        let mut drone2 = MyDrone::new(
+        let mut drone2 = CppEnjoyersDrone::new(
             12,
             tx_event.clone(),
             rx_cmd2.clone(),
@@ -715,7 +715,7 @@ mod drone_tests {
 
         // Drone 11
         let neighbours11 = HashMap::from([(12, d12_send.clone()), (1, c_send.clone())]);
-        let mut drone = MyDrone::new(
+        let mut drone = CppEnjoyersDrone::new(
             11,
             tx_event.clone(),
             rx_cmd.clone(),
@@ -725,7 +725,7 @@ mod drone_tests {
         );
         // Drone 12
         let neighbours12 = HashMap::from([(11, d_send.clone())]);
-        let mut drone2 = MyDrone::new(
+        let mut drone2 = CppEnjoyersDrone::new(
             12,
             tx_event.clone(),
             rx_cmd2.clone(),
@@ -775,7 +775,7 @@ mod drone_tests {
 
         // Drone 11
         let neighbours11 = HashMap::from([(12, d12_send.clone()), (1, c_send.clone())]);
-        let mut drone = MyDrone::new(
+        let mut drone = CppEnjoyersDrone::new(
             11,
             unbounded().0,
             d_command_recv.clone(),
@@ -785,7 +785,7 @@ mod drone_tests {
         );
         // Drone 12
         let neighbours12 = HashMap::from([(11, d_send.clone())]);
-        let mut drone2 = MyDrone::new(
+        let mut drone2 = CppEnjoyersDrone::new(
             12,
             unbounded().0,
             unbounded().1,
@@ -864,7 +864,7 @@ mod drone_tests {
             (1, c_send.clone()),
             (14, d14_send.clone()),
         ]);
-        let mut drone = MyDrone::new(
+        let mut drone = CppEnjoyersDrone::new(
             11,
             unbounded().0,
             d11_rx_cmd.clone(),
@@ -874,7 +874,7 @@ mod drone_tests {
         );
         // Drone 12
         let neighbours12 = HashMap::from([(11, d_send.clone()), (13, d13_send.clone())]);
-        let mut drone2 = MyDrone::new(
+        let mut drone2 = CppEnjoyersDrone::new(
             12,
             unbounded().0,
             d12_rx_cmd.clone(),
@@ -884,7 +884,7 @@ mod drone_tests {
         );
         // Drone 13
         let neighbours13 = HashMap::from([(12, d12_send.clone()), (14, d14_send.clone())]);
-        let mut drone3 = MyDrone::new(
+        let mut drone3 = CppEnjoyersDrone::new(
             13,
             unbounded().0,
             d13_rx_cmd.clone(),
@@ -894,7 +894,7 @@ mod drone_tests {
         );
         // Drone 14
         let neighbours14 = HashMap::from([(11, d_send.clone()), (13, d13_send.clone())]);
-        let mut drone4 = MyDrone::new(
+        let mut drone4 = CppEnjoyersDrone::new(
             14,
             unbounded().0,
             d14_rx_cmd.clone(),

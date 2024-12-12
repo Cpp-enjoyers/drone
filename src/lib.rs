@@ -47,7 +47,7 @@ impl State {
 }
 
 #[derive(Debug)]
-pub struct MyDrone {
+pub struct CppEnjoyersDrone {
     id: NodeId,
     log_channel: String,
     controller_send: Sender<DroneEvent>,
@@ -59,7 +59,7 @@ pub struct MyDrone {
     flood_history: HashMap<NodeId, RingBuffer<u64>>,
 }
 
-impl Drone for MyDrone {
+impl Drone for CppEnjoyersDrone {
     fn new(
         id: NodeId,
         controller_send: Sender<DroneEvent>,
@@ -131,7 +131,7 @@ impl Drone for MyDrone {
     }
 }
 
-impl MyDrone {
+impl CppEnjoyersDrone {
     fn send_nack(&self, mut packet: Packet, nack_type: NackType) {
         let mut source_header: SourceRoutingHeader = match packet
             .routing_header
