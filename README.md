@@ -27,5 +27,5 @@ By default, the program logs everything in debug mode and only errors in release
 By default, the drone keeps track of the last 64 FloodIDs for every different initiator. I fyou want to keep track of every FloodID, you can change this behaviour by setting the unlimited_buffer config in your Cargo.toml:
 ```toml
 [dependencies]
-unlimited_buffer = { features =  ["unlimited_buffer"] }
+ap2024_unitn_cppenjoyers_drone = { git = "https://github.com/Cpp-enjoyers/drone.git", features =  ["unlimited_buffer"] }
 ```
