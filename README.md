@@ -12,7 +12,7 @@ use ap2024_unitn_cppenjoyers_drone;
 
 fn main(){
 
-  let drone = ap2024_unitn_cppenjoyers_drone::MyDrone::new(...);
+  let drone = ap2024_unitn_cppenjoyers_drone::CppEnjoyersDrone::new(...);
 
 }
 
@@ -24,7 +24,7 @@ If you can't see the logs, be sure to enable the environment variable "RUST_LOG"
 By default, the program logs everything in debug mode and only errors in release mode.
 
 ## RingBuffer for FloodIDs
-By default, the drone keeps track of the last 64 FloodIDs for every different initiator. I fyou want to keep track of every FloodID, you can change this behaviour by setting the unlimited_buffer config in your Cargo.toml:
+By default, the drone keeps track of the last 64 FloodIDs for every different initiator. If you want to keep track of every FloodID, you can change this behaviour by setting the unlimited_buffer config in your Cargo.toml:
 ```toml
 [dependencies]
 ap2024_unitn_cppenjoyers_drone = { git = "https://github.com/Cpp-enjoyers/drone.git", features =  ["unlimited_buffer"] }
