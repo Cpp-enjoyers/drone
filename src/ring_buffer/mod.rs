@@ -1,4 +1,8 @@
 #![allow(unused)]
+
+#[cfg(test)]
+mod tests;
+
 use std::collections::VecDeque;
 
 #[derive(Debug)]
