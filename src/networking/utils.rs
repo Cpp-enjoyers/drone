@@ -14,10 +14,6 @@ use wg_2024::packet::*;
 use wg_2024::tests::*;
 
 // TODO is this useful? or use another way to send packets (due to simulation controller)
-pub fn send_packet(packet: Packet, c: &Sender<Packet>) {
+pub fn send_packet(packet: Packet, c: &Sender<Packet>) {}
 
-}
-
-pub fn send_nack(mut packet: Packet, nack_type: NackType, c: &Sender<Packet>) {
-
-}
+pub fn send_nack(mut packet: Packet, nack_type: NackType, c: &Sender<Packet>) {}

@@ -1,6 +1,6 @@
 mod drone;
-mod ring_buffer;
 mod networking;
+mod ring_buffer;
 
 #[cfg(test)]
 mod tests;

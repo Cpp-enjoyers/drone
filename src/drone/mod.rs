@@ -126,7 +126,6 @@ impl Drone for CppEnjoyersDrone {
     }
 }
 
-
 impl CppEnjoyersDrone {
     fn send_nack(&self, mut packet: Packet, nack_type: NackType) {
         let mut source_header: SourceRoutingHeader = match packet

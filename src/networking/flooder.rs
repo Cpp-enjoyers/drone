@@ -24,8 +24,16 @@ pub trait Flooder {
     fn send_to_controller(&self, p: Packet);
 
     //
-    fn handle_flood_request(&mut self, routing_header: SourceRoutingHeader, sid: u64, mut flood_r: FloodRequest) -> Result<(), ()> {
-        let sender_id: u8 = flood_r.path_trace.last().map_or(flood_r.initiator_id, |(id, t)| *id);
+    fn handle_flood_request(
+        &mut self,
+        routing_header: SourceRoutingHeader,
+        sid: u64,
+        mut flood_r: FloodRequest,
+    ) -> Result<(), ()> {
+        let sender_id: u8 = flood_r
+            .path_trace
+            .last()
+            .map_or(flood_r.initiator_id, |(id, t)| *id);
         let flood_tuple_id = (flood_r.initiator_id, flood_r.flood_id);
 
         flood_r.increment(self.get_id(), Self::NODE_TYPE);
@@ -34,21 +42,29 @@ pub trait Flooder {
         if self.has_seen_flood(flood_tuple_id) || it.len() <= 1 {
             let mut new_packet: Packet = flood_r.generate_response(sid);
             new_packet.routing_header.increase_hop_index();
-            let next_hop: NodeId = new_packet.routing_header.current_hop().expect("If this panics the wg code is borken");
-            return match it.find(|(id, c)| *id == next_hop) {
-                Some((_, c)) => { c.send(new_packet.clone()); self.send_to_controller(new_packet); Ok(()) },
+            let next_hop: NodeId = new_packet
+                .routing_header
+                .current_hop()
+                .expect("If this panics the wg code is borken");
+            match it.find(|(id, c)| *id == next_hop) {
+                Some((_, c)) => {
+                    c.send(new_packet.clone());
+                    self.send_to_controller(new_packet);
+                    Ok(())
+                }
                 None => Err(()),
             }
         } else {
             it.for_each(|(id, c)| {
                 if *id != sender_id {
-                    let new_packet = Packet::new_flood_request(routing_header.clone(), sid, flood_r.clone());
+                    let new_packet =
+                        Packet::new_flood_request(routing_header.clone(), sid, flood_r.clone());
                     c.send(new_packet.clone());
                     self.send_to_controller(new_packet);
                 }
             });
             self.insert_flood(flood_tuple_id);
-            return Ok(());
+            Ok(())
         }
     }
 }
