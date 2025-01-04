@@ -114,20 +114,11 @@ impl Drone for CppEnjoyersDrone {
                 },
             }
         }
-        loop {
-            select! {
-                recv(self.packet_recv) -> packet => {
-                    if let Ok(packet) = packet {
-                        info!(target: &self.log_channel, "Processing packet during crash: {:?}", packet);
-                        self.handle_crash(packet);
-                    }
-                },
-                default => {
-                    info!(target: &self.log_channel, "Crashing gently");
-                    break;
-                }
-            }
+        while let Ok(packet) = self.packet_recv.recv() {
+            info!(target: &self.log_channel, "Processing packet during crash: {:?}", packet);
+            self.handle_crash(packet);
         }
+        info!(target: &self.log_channel, "Crashing gently");
     }
 }
 
