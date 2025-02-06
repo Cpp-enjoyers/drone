@@ -203,24 +203,20 @@ impl CppEnjoyersDrone {
             return;
         }
         let next_hop: Option<NodeId> = packet.routing_header.current_hop();
-        match next_hop {
-            // STEP 4
-            Some(next_hop) => {
-                let next_hop_drone_id: NodeId = next_hop;
-                let next_hop_channel: Option<&Sender<Packet>> =
-                    self.packet_send.get(&next_hop_drone_id);
+        if let Some(next_hop) = next_hop {
+            let next_hop_drone_id: NodeId = next_hop;
+            let next_hop_channel: Option<&Sender<Packet>> =
+                self.packet_send.get(&next_hop_drone_id);
 
-                if let Some(next_hop_channel) = next_hop_channel {
-                    self.send_packet(packet, next_hop_channel);
-                } else {
-                    info!(target: &self.log_channel, "\tCreating Nack - Error in routing");
-                    self.send_nack(packet, NackType::ErrorInRouting(next_hop_drone_id));
-                }
+            if let Some(next_hop_channel) = next_hop_channel {
+                self.send_packet(packet, next_hop_channel);
+            } else {
+                info!(target: &self.log_channel, "\tCreating Nack - Error in routing");
+                self.send_nack(packet, NackType::ErrorInRouting(next_hop_drone_id));
             }
-            None => {
-                info!(target: & self.log_channel, "\tCreating Nack - Drone is destination");
-                self.send_nack(packet, NackType::DestinationIsDrone);
-            }
+        } else {
+            info!(target: & self.log_channel, "\tCreating Nack - Drone is destination");
+            self.send_nack(packet, NackType::DestinationIsDrone);
         }
     }
 
@@ -268,12 +264,11 @@ impl CppEnjoyersDrone {
         sid: u64,
         mut flood_r: FloodRequest,
     ) {
-        let sender_tuple: (NodeId, NodeType) = match flood_r.path_trace.last() {
-            Some(tup) => *tup,
-            None => {
-                warn!(target: &self.log_channel, "\tReceived flood request with empty path trace. Assuming it arrived from the initiator");
-                (flood_r.initiator_id, NodeType::Client) // assume it's a client, who cares
-            }
+        let sender_tuple: (NodeId, NodeType) = if let Some(tup) = flood_r.path_trace.last() {
+            *tup
+        } else {
+            warn!(target: &self.log_channel, "\tReceived flood request with empty path trace. Assuming it arrived from the initiator");
+            (flood_r.initiator_id, NodeType::Client) // assume it's a client, who cares
         };
 
         let (sender_id, _) = sender_tuple;
