@@ -1,5 +1,6 @@
+#![warn(clippy::pedantic)]
+
 mod drone;
-mod networking;
 mod ring_buffer;
 
 #[cfg(test)]
