@@ -1,7 +1,6 @@
 #![warn(clippy::pedantic)]
 
 mod drone;
-mod ring_buffer;
 
 #[cfg(test)]
 mod tests;

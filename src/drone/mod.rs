@@ -10,7 +10,7 @@ use wg_2024::config::Config;
 use wg_2024::controller::{DroneCommand, DroneEvent};
 use wg_2024::drone::Drone;
 use wg_2024::network::{NodeId, SourceRoutingHeader};
-use wg_2024::packet::*;
+use wg_2024::packet::{FloodRequest, Nack, NackType, NodeType, Packet, PacketType};
 use wg_2024::tests::*;
 
 const RING_BUFF_SZ: usize = 64;
@@ -18,7 +18,7 @@ const RING_BUFF_SZ: usize = 64;
 #[cfg(feature = "unlimited_buffer")]
 type RingBuffer<T> = HashSet<T>;
 #[cfg(not(feature = "unlimited_buffer"))]
-use super::ring_buffer::RingBuffer;
+use common::ring_buffer::RingBuffer;
 
 #[derive(Debug, PartialEq)]
 enum State {
@@ -41,6 +41,7 @@ impl State {
     }
 }
 
+#[allow(clippy::module_name_repetitions)]
 #[derive(Debug)]
 pub struct CppEnjoyersDrone {
     id: NodeId,
@@ -72,12 +73,13 @@ impl Drone for CppEnjoyersDrone {
             pretty_env_logger::try_init();
         }
 
-        let log_channel: String = format!("CppEnjoyers[{}]", id);
-        let mut pdr_distribution: Bernoulli =
-            Bernoulli::new(pdr as f64).unwrap_or_else(|e: rand::distributions::BernoulliError| {
+        let log_channel: String = format!("CppEnjoyers[{id}]");
+        let mut pdr_distribution: Bernoulli = Bernoulli::new(f64::from(pdr)).unwrap_or_else(
+            |e: rand::distributions::BernoulliError| {
                 warn!(target: &log_channel, "Invalid PDR {}, setting to 0.0", pdr);
                 Bernoulli::new(0.).unwrap()
-            });
+            },
+        );
         Self {
             id,
             log_channel,
@@ -119,15 +121,14 @@ impl Drone for CppEnjoyersDrone {
 
 impl CppEnjoyersDrone {
     fn send_nack(&self, mut packet: Packet, nack_type: NackType) {
-        let mut source_header: SourceRoutingHeader = match packet
+        let mut source_header: SourceRoutingHeader = if let Some(sh) = packet
             .routing_header
             .sub_route(0..packet.routing_header.hop_index)
         {
-            Some(sh) => sh,
-            None => {
-                error!(target: &self.log_channel, "\tCan't invert source routing header: {}. Dropping Nack packet", packet.routing_header);
-                return;
-            }
+            sh
+        } else {
+            error!(target: &self.log_channel, "\tCan't invert source routing header: {}. Dropping Nack packet", packet.routing_header);
+            return;
         };
         source_header.reset_hop_index();
         source_header.reverse();
@@ -167,7 +168,7 @@ impl CppEnjoyersDrone {
                                 .send(DroneEvent::PacketSent(nack.clone()));
                             s.send(nack);
                         },
-                    )
+                    );
             }
             PacketType::FloodRequest(_) => {
                 error!(target: &self.log_channel, "\tFound a flood request while trying to send back Nack. You probably found a bug :(");
@@ -184,7 +185,7 @@ impl CppEnjoyersDrone {
                 session_id,
                 ..
             } = packet;
-            self.handle_flood_request(routing_header, session_id, fr);
+            self.handle_flood_request(&routing_header, session_id, fr);
             return;
         }
 
@@ -263,7 +264,7 @@ impl CppEnjoyersDrone {
 
     fn handle_flood_request(
         &mut self,
-        routing_header: SourceRoutingHeader,
+        routing_header: &SourceRoutingHeader,
         sid: u64,
         mut flood_r: FloodRequest,
     ) {
@@ -320,7 +321,7 @@ impl CppEnjoyersDrone {
                 self.packet_send.insert(node_id, sender);
             }
             DroneCommand::SetPacketDropRate(pdr) => {
-                if let Ok(new_pdr) = Bernoulli::new(pdr as f64) {
+                if let Ok(new_pdr) = Bernoulli::new(f64::from(pdr)) {
                     info!(target: &self.log_channel, "\tSetting new PDR: {}", pdr);
                     self.pdr_distribution = new_pdr;
                 } else {
@@ -329,7 +330,7 @@ impl CppEnjoyersDrone {
             }
             DroneCommand::Crash => {
                 info!(target: &self.log_channel, "\tStarting crash routine");
-                self.state = State::Crashing
+                self.state = State::Crashing;
             }
             DroneCommand::RemoveSender(node_id) => {
                 info!(target: &self.log_channel, "\tRemoving sender channel to id: {}", node_id);
