@@ -20,6 +20,7 @@ type RingBuffer<T> = HashSet<T>;
 #[cfg(not(feature = "unlimited_buffer"))]
 use common::ring_buffer::RingBuffer;
 
+// internal state of the drone
 #[derive(Debug, PartialEq)]
 enum State {
     Running,
@@ -41,21 +42,38 @@ impl State {
     }
 }
 
+/// C++Enyoers Drone struct
 #[allow(clippy::module_name_repetitions)]
 #[derive(Debug)]
 pub struct CppEnjoyersDrone {
+    // drone's id in the topology
     id: NodeId,
+    // string log prefix
     log_channel: String,
+    // channel to scl
     controller_send: Sender<DroneEvent>,
+    // channel from scl
     controller_recv: Receiver<DroneCommand>,
+    // channel to read incoming packets
     packet_recv: Receiver<Packet>,
+    // Packet Drop Rate
     pdr_distribution: Bernoulli,
+    // channel to talk with direct neighbors
     packet_send: HashMap<NodeId, Sender<Packet>>,
+    // internal state if the drone
     state: State,
+    // history of flood requests that the drone has received, divided by initiator
     flood_history: HashMap<NodeId, RingBuffer<u64>>,
 }
 
 impl Drone for CppEnjoyersDrone {
+    /// Drone's constructor
+    /// * id: donre's id in the network
+    /// * constroller_send: channel to scl
+    /// * controller_recv: channel from scl
+    /// * packet_recv: channel to read incoming messages
+    /// * packet_send: map that links a neighbor with its channel
+    /// * pdr: Packet Drop Rate
     fn new(
         id: NodeId,
         controller_send: Sender<DroneEvent>,
@@ -93,6 +111,7 @@ impl Drone for CppEnjoyersDrone {
         }
     }
 
+    /// Core function that starts the drone
     fn run(&mut self) {
         info!(target: &self.log_channel, "Drone started");
         while self.is_running() {
@@ -120,6 +139,7 @@ impl Drone for CppEnjoyersDrone {
 }
 
 impl CppEnjoyersDrone {
+    // sends a nack of a given type related to the given packet
     fn send_nack(&self, mut packet: Packet, nack_type: NackType) {
         let mut source_header: SourceRoutingHeader = if let Some(sh) = packet
             .routing_header
@@ -177,6 +197,7 @@ impl CppEnjoyersDrone {
         }
     }
 
+    // handles a packet from another drone according to WG protocol
     fn handle_packet(&mut self, mut packet: Packet) {
         if let PacketType::FloodRequest(fr) = packet.pack_type {
             info!(target: &self.log_channel, "\tHandling flood request");
@@ -220,6 +241,7 @@ impl CppEnjoyersDrone {
         }
     }
 
+    // sends the given packet over the given channel and logs to scl the PacketSent event
     fn send_packet(&self, packet: Packet, channel: &Sender<Packet>) {
         match packet.pack_type {
             PacketType::Nack(_) | PacketType::Ack(_) => {
@@ -228,6 +250,7 @@ impl CppEnjoyersDrone {
                 info!(target: &self.log_channel, "\tLogging and sending packet to {}", packet.routing_header.current_hop().expect("If we panic here there's a bug :("));
                 channel.send(packet);
             }
+            // toss a coin for dropping the fragment
             PacketType::MsgFragment(_) => {
                 if self.pdr_distribution.sample(&mut rand::thread_rng()) {
                     let mut to_send: Packet = packet.clone();
@@ -258,6 +281,7 @@ impl CppEnjoyersDrone {
         }
     }
 
+    // handles flood requests differently from other packet types
     fn handle_flood_request(
         &mut self,
         routing_header: &SourceRoutingHeader,
@@ -298,8 +322,8 @@ impl CppEnjoyersDrone {
             return;
         }
 
-        // TODO add the check if the neighbour exists in debug mode
         ring_buff.insert(flood_r.flood_id);
+        // forward flood request
         self.packet_send.iter().for_each(|(id, c)| {
             if *id != sender_id {
                 let new_packet =
@@ -309,6 +333,7 @@ impl CppEnjoyersDrone {
         });
     }
 
+    // handles a command sent by the scl
     fn handle_command(&mut self, command: DroneCommand) {
         match command {
             DroneCommand::AddSender(node_id, sender) => {
@@ -334,6 +359,7 @@ impl CppEnjoyersDrone {
         }
     }
 
+    // handles packets in crashing mode according to WG protocol
     fn handle_crash(&mut self, mut packet: Packet) {
         match packet.pack_type {
             PacketType::Nack(_) | PacketType::Ack(_) | PacketType::FloodResponse(_) => {
@@ -350,11 +376,13 @@ impl CppEnjoyersDrone {
         }
     }
 
+    // tells if the drone is in running mode
     #[inline]
     fn is_running(&self) -> bool {
         self.state.is_running()
     }
 
+    // tells if the drone is in crashing mode
     #[inline]
     fn is_crashing(&self) -> bool {
         self.state.is_crashing()

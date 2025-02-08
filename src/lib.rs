@@ -1,3 +1,7 @@
+/*!
+    C++Enjoyers: Drone implementation
+*/
+
 #![warn(clippy::pedantic)]
 
 mod drone;
