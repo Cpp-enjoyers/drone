@@ -68,7 +68,7 @@ pub struct CppEnjoyersDrone {
 
 impl Drone for CppEnjoyersDrone {
     /// Drone's constructor
-    /// * id: donre's id in the network
+    /// * id: drone's id in the network
     /// * `constroller_send`: channel to scl
     /// * `controller_recv`: channel from scl
     /// * `packet_recv`: channel to read incoming messages
