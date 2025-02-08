@@ -69,10 +69,10 @@ pub struct CppEnjoyersDrone {
 impl Drone for CppEnjoyersDrone {
     /// Drone's constructor
     /// * id: donre's id in the network
-    /// * constroller_send: channel to scl
-    /// * controller_recv: channel from scl
-    /// * packet_recv: channel to read incoming messages
-    /// * packet_send: map that links a neighbor with its channel
+    /// * `constroller_send`: channel to scl
+    /// * `controller_recv`: channel from scl
+    /// * `packet_recv`: channel to read incoming messages
+    /// * `packet_send`: map that links a neighbor with its channel
     /// * pdr: Packet Drop Rate
     fn new(
         id: NodeId,
